@@ -28,9 +28,11 @@ public class BinanceWebSocketClient {
     private String wsUrl;
 
     // Flux.create() 대신 Sinks 사용 — 다중 구독자 지원
+    // autoCancel=false: 구독자 0명이 돼도 sink 종료 안 함 (전략 변경 시 끊김 방지)
+    // directAllOrNothing: 버퍼 없이 즉시 전달 — 구독자 없으면 그냥 DROP (전략 전환 시 쏟아짐 방지)
     private final Sinks.Many<TradeLog> sink = Sinks.many()
             .multicast()
-            .onBackpressureBuffer(2000);
+            .directAllOrNothing();
 
     @PostConstruct
     public void connect() {
@@ -48,7 +50,10 @@ public class BinanceWebSocketClient {
                                             trade.getSymbol(),
                                             trade.getPrice(),
                                             trade.isBuy() ? "매수" : "매도");
-                                    sink.tryEmitNext(trade);
+                                    Sinks.EmitResult result = sink.tryEmitNext(trade);
+                                    if (result.isFailure()) {
+                                        log.warn("Sink emit 실패: {} ({})", result, trade.getSymbol());
+                                    }
                                 })
                                 .doOnError(e -> log.error("파싱 오류: {}", e.getMessage()))
                                 .then()
