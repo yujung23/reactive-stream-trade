@@ -30,7 +30,7 @@ public class BinanceWebSocketClient {
     // Flux.create() 대신 Sinks 사용 — 다중 구독자 지원
     private final Sinks.Many<TradeLog> sink = Sinks.many()
             .multicast()
-            .onBackpressureBuffer(2000);
+            .onBackpressureBuffer(2000, false);
 
     @PostConstruct
     public void connect() {
@@ -85,6 +85,7 @@ public class BinanceWebSocketClient {
                     .isBuy(!msg.isMaker()) // maker=true → 매도
                     .tradeTime(msg.getTradeTime())
                     .tradeId(msg.getTradeId())
+                    .receivedAt(System.currentTimeMillis())
                     .build();
 
             return reactor.core.publisher.Mono.just(trade);

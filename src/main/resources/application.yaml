@@ -6,8 +6,8 @@ server:
   port: 8080
 
 binance:
-  ws-url: wss://stream.binance.com/ws/btcusdt@trade
+  ws-url: wss://stream.binance.com/ws/btcusdt@trade/ethusdt@trade/xrpusdt@trade
 
 stream:
-  buffer-size: 500
-  limit-rate: 20
+  buffer-size: 300
+  limit-rate: 50

@@ -32,9 +32,9 @@ public class TradeController {
                         .build());
     }
 
-    // 드롭 현황 조회
-    @GetMapping("/stats")
-    public Map<String, Long> stats() {
-        return tradeStreamService.getDropCounts();
+
+    @GetMapping("/metrics")
+    public Map<String, Object> metrics() {
+        return tradeStreamService.getMetrics();
     }
 }
