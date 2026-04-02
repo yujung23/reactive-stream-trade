@@ -1,11 +1,41 @@
 # Reactive Streams Trade
 
-Binance WebSocket에서 실시간 암호화폐 체결 데이터를 수신하고,
-Reactor 백프레셔 전략 3가지를 비교하는 Spring WebFlux 프로젝트입니다.
+Binance WebSocket에서 실시간 암호화폐 체결 데이터를 수신하고,  
+Reactor 기반 백프레셔 전략 3가지를 비교하는 Spring WebFlux 프로젝트입니다.
 
 ---
 
-## 전체 흐름
+## 목차
+
+- [프로젝트 개요](#1-프로젝트-개요)
+- [아키텍처](#2-아키텍처)
+- [전체 흐름](#전체-흐름)
+- [백프레셔 전략 비교](#4-백프레셔-전략-비교)
+- [백프레셔 동작 예시](#5-백프레셔-동작-예시)
+- [주요 컴포넌트](#6-주요-컴포넌트)
+  - [BinanceWebSocketClient](#binancewebsocketclient)
+  - [TradeStreamService](#tradestreamservice)
+  - [TradeController](#tradecontroller)
+  - [BinanceTradeMessage / TradeLog](#binancetrademessage--tradelog)
+- [API](#api)
+- [설정](#설정)
+- [핵심 Reactive 개념](#핵심-reactive-개념)
+- [실행](#실행)
+- [기술 스택](#기술-스택)
+
+  ---
+  
+## 1. 프로젝트 개요
+
+- WebSocket 기반 실시간 스트리밍 데이터 처리
+- Reactor `Flux`와 `Sinks`를 활용한 Hot Stream 구성
+- Backpressure 전략(buffer / latest / limitRate) 비교
+- SSE(Server-Sent Events)를 통한 실시간 데이터 전달
+- 드롭(drop) 발생 통계 수집 및 모니터링
+
+---
+
+## 2. 아키텍처
 
 ```
 Binance WebSocket
@@ -17,40 +47,86 @@ Binance WebSocket
 
 ---
 
-## 각 클래스 설명
+## 전체 흐름
+
+```
+Binance → WebSocket → Sink.emit()
+→ Flux (Hot Stream)
+→ Backpressure Strategy
+→ SSE (Browser)
+```
+
+---
+
+## 4. 백프레셔 전략 비교
+
+| 전략 | 파라미터 | 동작 | 처리 방식 | 특징 |
+|------|----------|------|-----------|------|
+| buffer | `?strategy=buffer` | 버퍼 N개 유지 | 오래된 데이터 DROP | 데이터 보존 |
+| latest | `?strategy=latest` | 최신 값 1개 유지 | 이전 데이터 DROP | 최신성 유지 |
+| limitRate | `?strategy=limitRate` | 처리량 제한 | request 수 제한 | 시스템 보호 |
+
+buffer와 latest는 **데이터가 넘쳤을 때 처리하는 전략**,  
+limitRate는 **요청량(request)을 제어해 백프레셔를 구현하는 방식**입니다.
+
+---
+
+## 5. 백프레셔 동작 예시
+
+가정:
+
+```
+Incoming: 1000 events/s
+Consumer: 20 events/s
+Buffer size: 50
+```
+| 전략 | Queue | Dropped | Delay |
+|------|------|--------|------|
+| buffer | 증가 | 증가 | 증가 |
+| latest | 1 | 매우 많음 | 낮음 |
+| limitRate | 0 | 없음 | 일정 |
+
+---
+
+## 6. 주요 컴포넌트
 
 ### BinanceWebSocketClient
 
 Binance WebSocket에 연결해 실시간 체결 데이터를 수신하는 핵심 컴포넌트입니다.
 
-- `Sinks.many().multicast().directAllOrNothing()` — 다중 구독자 지원. 구독자 중 한 명이라도 demand가 없으면 해당 emit 실패
-- `@PostConstruct connect()` — 앱 시작 시 자동으로 WebSocket 연결
-- `retryWhen(Retry.backoff(...))` — 연결 끊김 시 3초~최대 30초 간격으로 무한 재연결
-- `parse()` — Binance JSON을 TradeLog로 변환. `"trade"` 이벤트만 처리, 나머지는 무시
-- `m` 필드 — `m=true`는 매도(maker), `m=false`는 매수(taker)
+- `Sinks.many().multicast().directAllOrNothing()`
+  - 다중 구독자 지원
+  - 구독자 중 한 명이라도 demand가 없으면 emit 실패
+- `@PostConstruct connect()`
+  - 애플리케이션 시작 시 자동 WebSocket 연결
+- `retryWhen(Retry.backoff(...))`
+  - 연결 끊김 시 자동 재연결
+- `parse()`
+  - Binance JSON → TradeLog 변환
+- `m` 필드
+  - `true` = 매도(maker)
+  - `false` = 매수(taker)
+
+---
 
 ### TradeStreamService
 
-백프레셔 전략 3가지를 제공합니다. 구독자가 느릴 때 데이터 넘침을 어떻게 처리할지 선택합니다.
+백프레셔 전략을 선택하고 Flux 스트림을 구성하는 서비스입니다.
 
-| 전략 | 파라미터 | 동작 | 장단점 |
-|------|----------|------|--------|
-| **buffer** (기본) | `?strategy=buffer` | 버퍼 N개 유지, 초과 시 오래된 것 DROP | 데이터 보존 / 메모리 증가 위험 |
-| **latest** | `?strategy=latest` | 최신 값 1개만 유지, 나머지 DROP | 메모리 안정 / 데이터 유실 |
-| **limitRate** | `?strategy=limitRate` | 소비자 처리량 최대 20개로 제한 | 시스템 보호 / 처리량 제한 |
+역할:
 
+- Backpressure 전략 적용
+- Drop 이벤트 카운트
+- 스트림 생성 및 전달
 
-buffer와 latest는 데이터가 넘쳤을 때 처리하는 전략,
-limitRate는 애초에 처리 가능한 만큼만 요청하도록 제어하는 방식으로 백프레셔를 구현합니다.
+사용 전략:
 
-- limitRate = 소비 속도 조절 (request 조절)
-- buffer/latest = 넘친 데이터 처리 방식
+- buffer
+- latest
+- limitRate
 
-드롭 건수는 `AtomicLong`으로 카운트해 `/api/trades/stats`로 조회 가능합니다.
-
-
-
-
+Drop 카운트:
+AtomicLong
 
 ---
 
