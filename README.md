@@ -35,9 +35,9 @@ Binance WebSocket에 연결해 실시간 체결 데이터를 수신하는 핵심
 
 | 전략 | 파라미터 | 동작 | 장단점 |
 |------|----------|------|--------|
-| **buffer** (기본) | `?strategy=buffer` | 버퍼 50개 유지, 초과 시 오래된 것 DROP | 데이터 보존 / 메모리 증가 위험 |
+| **buffer** (기본) | `?strategy=buffer` | 버퍼 N개 유지, 초과 시 오래된 것 DROP | 데이터 보존 / 메모리 증가 위험 |
 | **latest** | `?strategy=latest` | 최신 값 1개만 유지, 나머지 DROP | 메모리 안정 / 데이터 유실 |
-| **limitRate** | `?strategy=limitRate` | 소비자 처리량 최대 20개로 제한 | 시스템 보호 / 처리량 제한 |
+| **limitRate** | `?strategy=limitRate` | 소비자 처리량 최대 N개로 제한 | 시스템 보호 / 처리량 제한 |
 
 드롭 건수는 `AtomicLong`으로 카운트해 `/api/trades/stats`로 조회 가능합니다.
 
