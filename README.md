@@ -1,64 +1,133 @@
- Binance 실시간 체결 데이터를 Reactive Streams로 처리하는 Spring WebFlux 애플리케이션입니다.
+# Reactive Streams Trade
 
-  ---
-  전체 데이터 흐름
+Binance WebSocket에서 실시간 암호화폐 체결 데이터를 수신하고,
+Reactor 백프레셔 전략 3가지를 비교하는 Spring WebFlux 프로젝트입니다.
 
-  Binance WS ──→ BinanceWebSocketClient ──→ TradeStreamService ──→ TradeController ──→ SSE(브라우저)
-                 (Sinks.Many)               (Backpressure 전략)      (ServerSentEvent)
+---
 
+## 전체 흐름
 
-  ---
-  각 클래스 설명
+```
+Binance WebSocket
+  └→ BinanceWebSocketClient  (Sinks.Many 멀티캐스트)
+       └→ TradeStreamService  (백프레셔 전략 선택)
+            └→ TradeController (SSE / 드롭 통계 API)
+```
 
-  BinanceWebSocketClient (client 레이어)
+---
 
-  Binance WebSocket에 연결해 실시간 체결 데이터를 수신하는 핵심 컴포넌트입니다.
+## 각 클래스 설명
 
-  - Sinks.Many<TradeLog> — 멀티캐스트 싱크. 여러 구독자가 동시에 스트림을 받을 수 있고, 버퍼 2000개를 유지합니다.
-  - @PostConstruct connect() — 앱 시작 시 자동으로 WebSocket 연결을 맺습니다.
-  - retryWhen(Retry.backoff(...)) — 연결 끊김 시 3초~최대 30초 간격으로 무한 재연결합니다.
-  - parse() — Binance JSON ({"e":"trade","s":"BTCUSDT","p":"...","m":false,...})을 TradeLog로 변환. "trade" 이벤트만 처리하고 나머지는 무시합니다.
-  - maker 필드 — Binance에서 m=true는 매도(maker), m=false는 매수(taker)를 의미합니다.
+### BinanceWebSocketClient
 
-  TradeStreamService (service 레이어)
+Binance WebSocket에 연결해 실시간 체결 데이터를 수신하는 핵심 컴포넌트입니다.
 
-  Backpressure 전략 3가지를 제공합니다. 구독자가 느릴 때 데이터 넘침을 어떻게 처리할지 선택합니다.
+- `Sinks.many().multicast().directAllOrNothing()` — 다중 구독자 지원. 구독자 중 한 명이라도 demand가 없으면 해당 emit 실패
+- `@PostConstruct connect()` — 앱 시작 시 자동으로 WebSocket 연결
+- `retryWhen(Retry.backoff(...))` — 연결 끊김 시 3초~최대 30초 간격으로 무한 재연결
+- `parse()` — Binance JSON을 TradeLog로 변환. `"trade"` 이벤트만 처리, 나머지는 무시
+- `m` 필드 — `m=true`는 매도(maker), `m=false`는 매수(taker)
 
-  ┌───────────────┬─────────────────────┬─────────────────────────────────────────────┐
-  │     전략       │      파라미터          │                    동작                     │
-  ├───────────────┼─────────────────────┼─────────────────────────────────────────────┤
-  │ buffer (기본)  │ ?strategy=buffer    │ 최대 50개 버퍼, 넘치면 가장 오래된 것 DROP         │
-  ├───────────────┼─────────────────────┼─────────────────────────────────────────────┤
-  │ latest        │ ?strategy=latest    │ 최신 1개만 유지, 나머지 DROP                     │
-  ├───────────────┼─────────────────────┼─────────────────────────────────────────────┤
-  │ limitRate     │ ?strategy=limitRate │ 초당 20개로 속도 제한                            │
-  └───────────────┴─────────────────────┴─────────────────────────────────────────────┘
+### TradeStreamService
 
-  드롭된 건수는 AtomicLong으로 카운트해 조회 가능합니다.
+백프레셔 전략 3가지를 제공합니다. 구독자가 느릴 때 데이터 넘침을 어떻게 처리할지 선택합니다.
 
-  | 전략 | 장점 | 단점 | 핵심 키워드 |
-|------|------|------|-------------|
-| Buffer | 데이터 보존 | 메모리 증가 위험 | 데이터 안정성 |
-| Latest | 메모리 안정 | 데이터 유실 | 최신 상태 유지 |
-| LimitRate | 시스템 보호 | 처리량 제한 | 속도 제어 |
+| 전략 | 파라미터 | 동작 | 장단점 |
+|------|----------|------|--------|
+| **buffer** (기본) | `?strategy=buffer` | 버퍼 50개 유지, 초과 시 오래된 것 DROP | 데이터 보존 / 메모리 증가 위험 |
+| **latest** | `?strategy=latest` | 최신 값 1개만 유지, 나머지 DROP | 메모리 안정 / 데이터 유실 |
+| **limitRate** | `?strategy=limitRate` | 소비자 처리량 최대 20개로 제한 | 시스템 보호 / 처리량 제한 |
 
-  TradeController (API 레이어)
+드롭 건수는 `AtomicLong`으로 카운트해 `/api/trades/stats`로 조회 가능합니다.
 
-  두 개의 엔드포인트를 제공합니다.
+### TradeController
 
-  - GET /api/trades/stream?strategy=buffer — SSE(Server-Sent Events)로 실시간 체결 스트림 전송
-  - GET /api/trades/stats — 각 전략별 DROP 발생 횟수 조회
+- `GET /api/trades/stream?strategy=buffer` — SSE로 실시간 체결 스트림 전송
+- `GET /api/trades/stats` — 전략별 드롭 발생 횟수 조회
 
-  BinanceTradeMessage / TradeLog
+### BinanceTradeMessage / TradeLog
 
-  - BinanceTradeMessage — Binance API 응답 JSON 그대로 매핑하는 DTO ("e", "s", "p" 등 단문자 키)
-  - TradeLog — 내부에서 사용하는 도메인 객체 (price/quantity는 String → double 변환 완료)
+- `BinanceTradeMessage` — Binance API 응답 JSON 매핑 DTO (`"e"`, `"s"`, `"p"` 등 단문자 키 사용)
+- `TradeLog` — 내부 도메인 객체 (price/quantity는 String → double 변환 완료)
 
-  ---
-  핵심 Reactive 개념
+---
 
-  Binance → sink.tryEmitNext() → Flux(hot stream) → backpressure 전략 → SSE
+## API
 
-  - Hot Stream: Sinks.Many는 구독 여부와 관계없이 데이터가 계속 흘러옵니다.
-  - Backpressure: 소비자(브라우저)가 느리면 데이터가 쌓이므로, 3가지 전략으로 처리 방식을 선택합니다.
-  - SSE: HTTP 커넥션을 유지한 채 서버→클라이언트 방향으로 이벤트를 밀어줍니다.
+### `GET /api/trades/stream`
+
+```bash
+curl -N "http://localhost:8080/api/trades/stream?strategy=buffer"
+curl -N "http://localhost:8080/api/trades/stream?strategy=latest"
+curl -N "http://localhost:8080/api/trades/stream?strategy=limitRate"
+```
+
+**응답 (SSE)**
+```
+event:trade
+data:{"symbol":"BTCUSDT","price":96450.0,"quantity":0.082,"buy":true,"tradeTime":1710000000000,"tradeId":123456}
+```
+
+### `GET /api/trades/stats`
+
+```json
+{
+  "buffer": 12,
+  "latest": 305,
+  "limitRate": 0
+}
+```
+
+> `limitRate` 전략은 Sink 레벨에서 드롭이 발생하므로 카운트가 집계되지 않습니다.
+
+---
+
+## 설정
+
+`src/main/resources/application.yaml`
+
+```yaml
+binance:
+  ws-url: wss://stream.binance.com/ws/btcusdt@trade/ethusdt@trade/xrpusdt@trade
+
+stream:
+  buffer-size: 500   # 주의: TradeStreamService에서 현재 50으로 하드코딩됨
+  limit-rate: 20
+
+server:
+  port: 8080
+```
+
+구독 심볼 변경: `ws-url` 경로 수정 (형식: `심볼@trade`)
+
+---
+
+## 핵심 Reactive 개념
+
+```
+Binance → sink.tryEmitNext() → Flux (hot stream) → backpressure 전략 → SSE
+```
+
+- **Hot Stream**: `Sinks.Many`는 구독 여부와 관계없이 데이터가 계속 흘러옵니다
+- **Backpressure**: 소비자(브라우저)가 느리면 데이터가 쌓이므로 3가지 전략으로 처리 방식을 선택합니다
+- **SSE**: HTTP 커넥션을 유지한 채 서버 → 클라이언트 방향으로 이벤트를 밀어줍니다
+
+---
+
+## 실행
+
+```bash
+./gradlew bootRun
+```
+
+CORS: `http://localhost:3000` 허용
+
+---
+
+## 기술 스택
+
+- Java 17
+- Spring Boot 4.0.5 / Spring WebFlux
+- Project Reactor (`Flux`, `Sinks`)
+- Reactor Netty WebSocket Client
+- Lombok / Jackson
