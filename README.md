@@ -92,7 +92,7 @@ binance:
   ws-url: wss://stream.binance.com/ws/btcusdt@trade/ethusdt@trade/xrpusdt@trade
 
 stream:
-  buffer-size: 500   # 주의: TradeStreamService에서 현재 50으로 하드코딩됨
+  buffer-size: 500   # 현재 50으로 하드코딩됨
   limit-rate: 20
 
 server:
