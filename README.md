@@ -15,7 +15,6 @@ Reactor 기반 백프레셔 전략 3가지를 비교하는 Spring WebFlux 프로
 - [주요 컴포넌트](#6-주요-컴포넌트)
 - [API](#api)
 - [설정](#설정)
-- [핵심 Reactive 개념](#핵심-reactive-개념)
 - [실행](#실행)
 - [기술 스택](#기술-스택)
 
@@ -51,7 +50,9 @@ Binance → WebSocket → Sink.emit()
 → Backpressure Strategy
 → SSE (Browser)
 ```
-
+- **Hot Stream**: `Sinks.Many`는 구독 여부와 관계없이 데이터가 계속 흘러옵니다
+- **Backpressure**: 소비자(브라우저)가 느리면 데이터가 쌓이므로 3가지 전략으로 처리 방식을 선택합니다
+- **SSE**: HTTP 커넥션을 유지한 채 서버 → 클라이언트 방향으로 이벤트를 밀어줍니다
 ---
 
 ## 4. 백프레셔 전략 비교
@@ -185,18 +186,6 @@ server:
 ```
 
 구독 심볼 변경: `ws-url` 경로 수정 (형식: `심볼@trade`)
-
----
-
-## 핵심 Reactive 개념
-
-```
-Binance → sink.tryEmitNext() → Flux (hot stream) → backpressure 전략 → SSE
-```
-
-- **Hot Stream**: `Sinks.Many`는 구독 여부와 관계없이 데이터가 계속 흘러옵니다
-- **Backpressure**: 소비자(브라우저)가 느리면 데이터가 쌓이므로 3가지 전략으로 처리 방식을 선택합니다
-- **SSE**: HTTP 커넥션을 유지한 채 서버 → 클라이언트 방향으로 이벤트를 밀어줍니다
 
 ---
 
