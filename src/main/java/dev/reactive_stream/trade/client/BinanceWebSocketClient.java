@@ -29,9 +29,12 @@ public class BinanceWebSocketClient {
     @Value("${binance.ws-url}")
     private String wsUrl;
 
+
     private final Sinks.Many<TradeLog> sink = Sinks.many()
             .multicast()
             .onBackpressureBuffer(2000, false);
+
+    private final AtomicLong recvCounter = new AtomicLong();
 
 
     @PostConstruct
