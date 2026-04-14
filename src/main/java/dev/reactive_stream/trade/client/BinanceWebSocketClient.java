@@ -33,8 +33,6 @@ public class BinanceWebSocketClient {
             .multicast()
             .onBackpressureBuffer(2000, false);
 
-    // ✅ 추가
-    private final AtomicLong recvCounter = new AtomicLong();
 
     @PostConstruct
     public void connect() {
@@ -53,7 +51,10 @@ public class BinanceWebSocketClient {
                                             trade.getSymbol(),
                                             trade.getPrice(),
                                             trade.isBuy() ? "매수" : "매도");
-                                    sink.tryEmitNext(trade);
+                                    Sinks.EmitResult result = sink.tryEmitNext(trade);
+                                    if (result.isFailure()) {
+                                        log.warn("Sink emit 실패: {} ({})", result, trade.getSymbol());
+                                    }
                                 })
                                 .doOnError(e -> log.error("파싱 오류: {}", e.getMessage()))
                                 .then()
