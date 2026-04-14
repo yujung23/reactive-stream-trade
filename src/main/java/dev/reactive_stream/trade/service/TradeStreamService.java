@@ -1,16 +1,16 @@
 package dev.reactive_stream.trade.service;
 
-
 import dev.reactive_stream.trade.client.BinanceWebSocketClient;
 import dev.reactive_stream.trade.domain.TradeLog;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-import reactor.core.publisher.BufferOverflowStrategy; // ✅ 이걸로 교체
+import reactor.core.publisher.BufferOverflowStrategy;
 import reactor.core.publisher.Flux;
-// import reactor.core.publisher.FluxSink; ← 이거 삭제
 
+import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -38,11 +38,25 @@ public class TradeStreamService {
     private final AtomicLong latestLatency  = new AtomicLong();
     private final AtomicLong latestLatCount = new AtomicLong();
 
+    // ✅ limitRate 전용 수신 카운터 추가
+    private final AtomicLong limitRecv      = new AtomicLong();
     private final AtomicLong limitProc      = new AtomicLong();
     private final AtomicLong limitLatency   = new AtomicLong();
     private final AtomicLong limitLatCount  = new AtomicLong();
 
     private final AtomicLong totalRecv = new AtomicLong();
+
+    // ✅ 처리 속도 모니터링
+    private final AtomicLong procCounter = new AtomicLong();
+
+    @PostConstruct
+    public void startMonitor() {
+        Flux.interval(Duration.ofSeconds(1))
+                .subscribe(tick -> {
+                    long proc = procCounter.getAndSet(0);
+                    log.info("초당 처리: {}건/초", proc);
+                });
+    }
 
     public Flux<TradeLog> streamWithBuffer() {
         return wsClient.getStream()
@@ -54,6 +68,7 @@ public class TradeStreamService {
                 )
                 .doOnNext(t -> {
                     bufferProc.incrementAndGet();
+                    procCounter.incrementAndGet(); // ✅ 처리 속도 카운트
                     long lat = System.currentTimeMillis() - t.getReceivedAt();
                     bufferLatency.addAndGet(lat);
                     bufferLatCount.incrementAndGet();
@@ -67,6 +82,7 @@ public class TradeStreamService {
                 .doOnDiscard(TradeLog.class, d -> latestDrop.incrementAndGet())
                 .doOnNext(t -> {
                     latestProc.incrementAndGet();
+                    procCounter.incrementAndGet(); // ✅ 처리 속도 카운트
                     long lat = System.currentTimeMillis() - t.getReceivedAt();
                     latestLatency.addAndGet(lat);
                     latestLatCount.incrementAndGet();
@@ -75,9 +91,11 @@ public class TradeStreamService {
 
     public Flux<TradeLog> streamWithLimitRate() {
         return wsClient.getStream()
+                .doOnNext(t -> limitRecv.incrementAndGet()) // ✅ 수신 전 카운트
                 .limitRate(limitRate)
                 .doOnNext(t -> {
                     limitProc.incrementAndGet();
+                    procCounter.incrementAndGet(); // ✅ 처리 속도 카운트
                     long lat = System.currentTimeMillis() - t.getReceivedAt();
                     limitLatency.addAndGet(lat);
                     limitLatCount.incrementAndGet();
@@ -92,11 +110,13 @@ public class TradeStreamService {
         };
     }
 
-    // 지표 반환
     public Map<String, Object> getMetrics() {
-        long blc = bufferLatCount.get();
-        long llc = latestLatCount.get();
+        long blc  = bufferLatCount.get();
+        long llc  = latestLatCount.get();
         long lrlc = limitLatCount.get();
+
+        // ✅ limitRate 실질 드롭 = 수신 - 처리
+        long limitDrop = Math.max(0, limitRecv.get() - limitProc.get());
 
         return Map.of(
                 "buffer", Map.of(
@@ -110,7 +130,7 @@ public class TradeStreamService {
                         "avgLatency", llc > 0 ? latestLatency.get() / llc : 0
                 ),
                 "limitRate", Map.of(
-                        "drop",       0,
+                        "drop",       limitDrop, // ✅ 실질 드롭
                         "proc",       limitProc.get(),
                         "avgLatency", lrlc > 0 ? limitLatency.get() / lrlc : 0
                 ),

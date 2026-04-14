@@ -11,11 +11,13 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.socket.WebSocketMessage;
 import org.springframework.web.reactive.socket.client.ReactorNettyWebSocketClient;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 import reactor.util.retry.Retry;
 
 import java.net.URI;
 import java.time.Duration;
+import java.util.concurrent.atomic.AtomicLong;
 
 @Slf4j
 @Component
@@ -27,10 +29,12 @@ public class BinanceWebSocketClient {
     @Value("${binance.ws-url}")
     private String wsUrl;
 
-    // Flux.create() 대신 Sinks 사용 — 다중 구독자 지원
     private final Sinks.Many<TradeLog> sink = Sinks.many()
             .multicast()
             .onBackpressureBuffer(2000, false);
+
+    // ✅ 추가
+    private final AtomicLong recvCounter = new AtomicLong();
 
     @PostConstruct
     public void connect() {
@@ -44,6 +48,7 @@ public class BinanceWebSocketClient {
                                 .map(WebSocketMessage::getPayloadAsText)
                                 .flatMap(this::parse)
                                 .doOnNext(trade -> {
+                                    recvCounter.incrementAndGet(); // ✅ 추가
                                     log.debug("수신: {} {} {}",
                                             trade.getSymbol(),
                                             trade.getPrice(),
@@ -61,6 +66,13 @@ public class BinanceWebSocketClient {
                 )
                 .subscribe();
 
+        // ✅ 추가 — 1초마다 유입 속도 출력
+        Flux.interval(Duration.ofSeconds(1))
+                .subscribe(tick -> {
+                    long count = recvCounter.getAndSet(0);
+                    log.info("초당 유입: {}건/초", count);
+                });
+
         log.info("Binance WebSocket 연결 시작: {}", wsUrl);
     }
 
@@ -68,31 +80,35 @@ public class BinanceWebSocketClient {
         return sink.asFlux();
     }
 
-    private reactor.core.publisher.Mono<TradeLog> parse(String json) {
+    // ✅ 유입 속도 외부에서 조회 가능하게
+    public long getRecvRate() {
+        return recvCounter.get();
+    }
+
+    private Mono<TradeLog> parse(String json) {
         try {
             BinanceTradeMessage msg =
                     objectMapper.readValue(json, BinanceTradeMessage.class);
 
-            // "trade" 이벤트만 처리
             if (!"trade".equals(msg.getEventType())) {
-                return reactor.core.publisher.Mono.empty();
+                return Mono.empty();
             }
 
             TradeLog trade = TradeLog.builder()
                     .symbol(msg.getSymbol())
                     .price(Double.parseDouble(msg.getPrice()))
                     .quantity(Double.parseDouble(msg.getQuantity()))
-                    .isBuy(!msg.isMaker()) // maker=true → 매도
+                    .isBuy(!msg.isMaker())
                     .tradeTime(msg.getTradeTime())
                     .tradeId(msg.getTradeId())
                     .receivedAt(System.currentTimeMillis())
                     .build();
 
-            return reactor.core.publisher.Mono.just(trade);
+            return Mono.just(trade);
 
         } catch (Exception e) {
             log.warn("파싱 실패: {}", json);
-            return reactor.core.publisher.Mono.empty();
+            return Mono.empty();
         }
     }
 }

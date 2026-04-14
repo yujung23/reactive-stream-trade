@@ -9,5 +9,5 @@ binance:
   ws-url: wss://stream.binance.com/ws/btcusdt@trade/ethusdt@trade/xrpusdt@trade
 
 stream:
-  buffer-size: 300
+  buffer-size: 100
   limit-rate: 50
